@@ -3,6 +3,10 @@ using System.Net;
 using System.Security.Policy;
 using System.IO;
 using System.IO.Compression;
+using static System.Windows.Forms.Design.AxImporter;
+using static System.Windows.Forms.LinkLabel;
+using System.Threading;
+using System.Diagnostics.Metrics;
 
 namespace URLDownloader
 {
@@ -51,18 +55,39 @@ namespace URLDownloader
             _outputPath = tb_OutputPath.Text;
             _urlListPath = tb_UrlList.Text;
             var zipPath = _outputPath + "\\" + _zipName;
-            var counter = 0;
 
-            using StreamReader reader = new StreamReader(_urlListPath);
-            while ((_url = reader.ReadLine()) != null)
-            {
-                await DownloadToZipImagesAsync(_url, zipPath);
-                counter++;
-                lbl_FileCounter.Text = counter.ToString();
-            }
+            await DownloadToZipImagesAsync(_urlListPath, zipPath);
 
             MessageBox.Show("Completed");
         }
+
+        private async Task DownloadToZipImagesAsync(string urlListPath, string zipPath)
+        {
+            IEnumerable<string> urls = File.ReadLines(urlListPath);
+            ParallelOptions options = new ParallelOptions() { MaxDegreeOfParallelism = 10 };
+            SemaphoreSlim semaphore = new SemaphoreSlim(1, 1); 
+
+            await Parallel.ForEachAsync(urls, options, async (line, _) =>
+            {
+                using Stream responseStream = await _httpClient.GetStreamAsync(line);
+                MemoryStream buffer = new();
+                responseStream.CopyTo(buffer);
+                buffer.Position = 0;
+                var fileName = line.Substring(line.LastIndexOf('/') + 1);
+
+                await semaphore.WaitAsync();
+                try
+                {
+                    using FileStream zipStream = new FileStream(zipPath, FileMode.OpenOrCreate);
+                    using ZipArchive zip = new(zipStream, ZipArchiveMode.Update);
+                    ZipArchiveEntry file = zip.CreateEntry(fileName);
+                    using Stream fileStream = file.Open();
+                    buffer.CopyTo(fileStream);
+                }
+                finally { semaphore.Release(); }
+            });
+        }
+
 
         private async void DownloadImageAsync(string url)
         {
@@ -72,17 +97,34 @@ namespace URLDownloader
             responseStream.CopyTo(fileStream);
         }
 
-        private async Task DownloadToZipImagesAsync(string url, string zipPath)
-        {
-            var fileName = url.Substring(url.LastIndexOf('/') + 1);
+        //private async void btn_SaveAll_Click(object sender, EventArgs e)
+        //{
+        //    _outputPath = tb_OutputPath.Text;
+        //    _urlListPath = tb_UrlList.Text;
+        //    var zipPath = _outputPath + "\\" + _zipName;
+        //    var counter = 0;
 
-            using var responseStream = await _httpClient.GetStreamAsync(url);
-            using var zipStream = new FileStream(zipPath, FileMode.OpenOrCreate);
-            using var zip = new ZipArchive(zipStream, ZipArchiveMode.Update);
-            var file = zip.CreateEntry(fileName);
-            using var fileStream = file.Open();
-            responseStream.CopyTo(fileStream);
-        }
+        //    using StreamReader reader = new StreamReader(_urlListPath);
+        //    while ((_url = reader.ReadLine()) != null)
+        //    {
+        //        await DownloadToZipImagesAsync(_url, zipPath);
+        //        counter++;
+        //        lbl_FileCounter.Text = counter.ToString();
+        //    }
 
+        //    MessageBox.Show("Completed");
+        //}
+
+        //private async Task DownloadToZipImagesAsync(string url, string zipPath)
+        //{
+        //    var fileName = url.Substring(url.LastIndexOf('/') + 1);
+
+        //    using var responseStream = await _httpClient.GetStreamAsync(url);
+        //    using var zipStream = new FileStream(zipPath, FileMode.OpenOrCreate);
+        //    using var zip = new ZipArchive(zipStream, ZipArchiveMode.Update);
+        //    var file = zip.CreateEntry(fileName);
+        //    using var fileStream = file.Open();
+        //    responseStream.CopyTo(fileStream);
+        //}
     }
 }
